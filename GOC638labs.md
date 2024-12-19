@@ -73,4 +73,16 @@ setup.exe /action=AddNode /updateenabled=true /updatesource="[path]"
 
 ## SQL CLUSTER
 - install CU30 (pasivni, failover, pasivni)
+- vypnout SharedMemory v ramci Network Protokolu (SQL SERVER CONFIG MANAGER)
+- nastavit Kerberos pro pripojeni k SQL clusteru `setspn -l gmsaSQL01`
+-- setspn -s 
+-- Kerberos Configuration Tool
+-- automatic registration v Active Directory
+```
+dsacls (Get-ADServiceAccount identity gMSASQL01).DistinguishedName /G "SELF:RPWP;servicePrincipalName"
+```
 
+# LAB - Always On Availability Groups
+## DC
+- new gMSA pro SQLAG
+- computer account pro cluster **WSFC-SQL-AG-01**, full control pro db-admin

@@ -19,15 +19,15 @@ new-adserviceaccount -name gMSASQL01 -samaccountname gMSASQL01 -dnshostname gMSA
 [SQL Account Overview](https://learn.microsoft.com/en-us/sql/database-engine/configure-windows/configure-windows-service-accounts-and-permissions?view=sql-server-ver16)
 
 
-## DATA (emulace SAN / SDS)
+## DC (emulace SAN / SDS)
 - server manager - iSCSI, new virtual disk, nastavit kdo se muze pripojit (fci1 a fci2)
 
 ## SQLFCI1
 - install WSFC
 - install AD PowerShell (RSAT)
 ```
-$servers = ('SQLFC1','SQLFCI2')
-foreach ($server in #servers) {install-windowsFeature -name RSAT-AD-PowerShell, Failover-Clustering, RSAT-Clustering -computername $server}
+$servers = ('SQLFCI1','SQLFCI2')
+foreach ($server in $servers) {install-windowsFeature -name RSAT-AD-PowerShell, Failover-Clustering, RSAT-Clustering -computername $server}
 ```
 - vytvorit cluster pomoci cluster konzole, validovat pozdeji (u validacnich vynechat storage)
 - spustit iSCSI Initiator, pripojit na server **DATA**

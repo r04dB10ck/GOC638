@@ -83,6 +83,127 @@ dsacls (Get-ADServiceAccount identity gMSASQL01).DistinguishedName /G "SELF:RPWP
 ```
 
 # LAB - Always On Availability Groups
+
+**Heslo**: Pa$$w0rd
+
 ## DC
-- new gMSA pro SQLAG
-- computer account pro cluster **WSFC-SQL-AG-01**, full control pro db-admin
+- skupina Global/Security pro SQL Servery SQLAGNodes, cleny jsou SQLAG1 a SQLAG2
+```
+new-adgroup -groupcategory security -groupscope global -name SQLAGNodes
+```
+- ucet pro beh SQL Serveru gMSA
+```
+new-adserviceaccount -name gMSASQL02 -samaccountname gMSASQL02 -dnshostname gMSASQL02.gopas.virtual -managedpasswordintervalindays 30 -PrincipalsAllowedToRetrieveManagedPassword SQLAGNodes
+```
+- computer account pro WSFC cluster **WSFC-SQL-AG-01**, opravneni pro **db-admin** nastavit na **full control**, disabled
+- computer account pro AG listener **SQLAG-LIS-01**, opravneni pro vyse vytvoreny ucet WSFC, disabled
+
+[Prestage cluster Objects](https://learn.microsoft.com/en-us/windows-server/failover-clustering/prestage-cluster-adds)
+
+## SQLAG1
+- install WSFC a RSAT
+```
+$servers = ('SQLAG1','SQLAG2')
+foreach ($server in $servers) {install-windowsFeature -name RSAT-AD-PowerShell, Failover-Clustering, RSAT-Clustering -computername $server}
+```
+- vytvorit cluster pomoci cluster konzole (bez sdileneho uloziste, pouze quorum disk nebo file share witness)
+- install gMSA
+```
+Install-AdServiceAccount -identity gMSASQL02
+Test-AdServiceAccount -identity gMSASQL02
+```
+- instalace SQL Serveru jako standalone instance (zadna sdilena storage)
+```
+setup.exe /action=Install /updateenabled=true /updatesource="[path]"
+```
+- povolit funkci Always On Availability Groups v SQL Server Configuration Manager nebo PowerShell
+```
+Enable-SqlAlwaysOn -ServerInstance SQLAG1 -Force
+```
+- vytvorit endpoint pro Database Mirroring
+```sql
+CREATE ENDPOINT [Hadr_endpoint]
+    AS TCP (LISTENER_PORT = 5022)
+    FOR DATA_MIRRORING (ROLE = ALL, ENCRYPTION = REQUIRED ALGORITHM AES);
+
+ALTER ENDPOINT [Hadr_endpoint] STATE = STARTED;
+```
+- vytvorit testovaci databazi a zazalohovat ji (plny backup + log backup)
+```sql
+CREATE DATABASE AGTestDB;
+ALTER DATABASE AGTestDB SET RECOVERY FULL;
+BACKUP DATABASE AGTestDB TO DISK = 'C:\Backup\AGTestDB.bak' WITH FORMAT;
+BACKUP LOG AGTestDB TO DISK = 'C:\Backup\AGTestDB_log.bak';
+```
+
+## SQLAG2
+- install WSFC a RSAT (viz SQLAG1)
+- pripojit node do existujiciho clusteru
+- install gMSA
+```
+Install-AdServiceAccount -identity gMSASQL02
+Test-AdServiceAccount -identity gMSASQL02
+```
+- instalace SQL Serveru jako standalone instance
+```
+setup.exe /action=Install /updateenabled=true /updatesource="[path]"
+```
+- povolit funkci Always On Availability Groups
+```
+Enable-SqlAlwaysOn -ServerInstance SQLAG2 -Force
+```
+- vytvorit endpoint pro Database Mirroring
+```sql
+CREATE ENDPOINT [Hadr_endpoint]
+    AS TCP (LISTENER_PORT = 5022)
+    FOR DATA_MIRRORING (ROLE = ALL, ENCRYPTION = REQUIRED ALGORITHM AES);
+
+ALTER ENDPOINT [Hadr_endpoint] STATE = STARTED;
+```
+- obnovit databazi ze zalohy (NORECOVERY)
+```sql
+RESTORE DATABASE AGTestDB FROM DISK = 'C:\Backup\AGTestDB.bak' WITH NORECOVERY;
+RESTORE LOG AGTestDB FROM DISK = 'C:\Backup\AGTestDB_log.bak' WITH NORECOVERY;
+```
+
+## SQL AG konfigurace (na SQLAG1)
+- vytvorit Availability Group
+```sql
+CREATE AVAILABILITY GROUP [AG01]
+    WITH (AUTOMATED_BACKUP_PREFERENCE = SECONDARY)
+    FOR DATABASE [AGTestDB]
+    REPLICA ON
+        N'SQLAG1' WITH (
+            ENDPOINT_URL = N'TCP://SQLAG1.gopas.virtual:5022',
+            FAILOVER_MODE = AUTOMATIC,
+            AVAILABILITY_MODE = SYNCHRONOUS_COMMIT,
+            BACKUP_PRIORITY = 50,
+            SECONDARY_ROLE (ALLOW_CONNECTIONS = NO)),
+        N'SQLAG2' WITH (
+            ENDPOINT_URL = N'TCP://SQLAG2.gopas.virtual:5022',
+            FAILOVER_MODE = AUTOMATIC,
+            AVAILABILITY_MODE = SYNCHRONOUS_COMMIT,
+            BACKUP_PRIORITY = 50,
+            SECONDARY_ROLE (ALLOW_CONNECTIONS = NO));
+```
+- pripojit sekundarni repliku na SQLAG2
+```sql
+ALTER AVAILABILITY GROUP [AG01] JOIN;
+ALTER DATABASE [AGTestDB] SET HADR AVAILABILITY GROUP = [AG01];
+```
+- pridat listener
+```sql
+ALTER AVAILABILITY GROUP [AG01]
+    ADD LISTENER N'SQLAG-LIS-01' (
+        WITH IP ((N'[IP adresa]', N'[Maska]')),
+        PORT = 1433);
+```
+- otestovat failover
+```sql
+-- na primarni replike
+ALTER AVAILABILITY GROUP [AG01] FAILOVER;
+```
+
+[Always On Availability Groups Overview](https://learn.microsoft.com/en-us/sql/database-engine/availability-groups/windows/overview-of-always-on-availability-groups-sql-server?view=sql-server-ver16)
+
+[Create Availability Group](https://learn.microsoft.com/en-us/sql/database-engine/availability-groups/windows/creation-and-configuration-of-availability-groups-sql-server?view=sql-server-ver16)
